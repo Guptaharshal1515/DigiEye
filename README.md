@@ -1,3 +1,9 @@
+
+<p align="center">
+  <img src="https://github.com/Guptaharshal1515/DigiEye/main/Images/logo.png" width="300" alt="DigiEye Logo">
+</p>
+
+
 # DigiEye
 
 ### Autonomous AI-Powered Cybersecurity Code Reasoning & Remediation Platform
@@ -125,80 +131,9 @@ DigiEye verifies remediation by:
 
 # Final Architecture
 
-```text
-                         +----------------------+
-                         |    Target System     |
-                         | Source / Application |
-                         +----------+-----------+
-                                    |
-                                    v
-                    +----------------------------+
-                    | Scope & Environment Layer  |
-                    | Language / Files / Runtime |
-                    +-------------+--------------+
-                                  |
-              +-------------------+-------------------+
-              |                   |                   |
-              v                   v                   v
-       +-------------+    +-------------+    +-------------+
-       |    SAST     |    |    DAST     |    |   Fuzzing  |
-       | Source Code |    | Live App    |    | Input Space|
-       +------+------+    +------+------+    +------+------+
-              |                   |                   |
-              +-------------------+-------------------+
-                                  |
-                                  v
-                    +----------------------------+
-                    | Finding Normalization      |
-                    | Deduplication & Correlation|
-                    +-------------+--------------+
-                                  |
-                                  v
-                    +----------------------------+
-                    |      Evidence Engine       |
-                    | Code + Tool + Runtime Data |
-                    +-------------+--------------+
-                                  |
-                                  v
-                    +----------------------------+
-                    |   AI Security Reasoner     |
-                    | Context / Root Cause / Risk|
-                    +-------------+--------------+
-                                  |
-                                  v
-                    +----------------------------+
-                    | Remediation Planner        |
-                    | Patch Strategy Generation  |
-                    +-------------+--------------+
-                                  |
-                                  v
-                    +----------------------------+
-                    | Controlled Patch Engine     |
-                    | Apply / Rollback / Diff    |
-                    +-------------+--------------+
-                                  |
-                                  v
-                    +----------------------------+
-                    | Verification Engine         |
-                    | SAST + DAST + Tests + Diff |
-                    +-------------+--------------+
-                                  |
-                         +--------+---------+
-                         |                  |
-                       PASS               FAIL
-                         |                  |
-                         v                  |
-                +----------------+          |
-                | Evidence Package|          |
-                +-------+--------+          |
-                        |                    |
-                        v                    |
-                +----------------+           |
-                | Final Reporting |           |
-                +----------------+           |
-                                             |
-                                             +--> Re-analysis
-```
+<p align="center">
+  <img src="https://github.com/Guptaharshal1515/DigiEye/main/Images/Architecture.png" width="100%" alt="DigiEye Architecture">
+</p>
 
 ---
 
@@ -402,20 +337,9 @@ The Evidence Engine answers:
 
 Instead of storing only an AI-generated explanation, DigiEye maintains evidence from multiple sources.
 
-```text
-             Evidence Engine
-                    |
-     +--------------+--------------+
-     |              |              |
-     v              v              v
-Source Evidence  Tool Evidence  Runtime Evidence
-     |              |              |
-     v              v              v
-Code lines       SAST results    HTTP responses
-AST context      DAST results    Crashes
-Diffs            Fuzz results    Stack traces
-Dependencies     Test results    Logs
-```
+<p align="center">
+  <img src="https://github.com/Guptaharshal1515/DigiEye/main/Images/Evidence%20engine.png" width="900" alt="DigiEye Evidence Engine">
+</p>
 
 Example:
 

@@ -6,7 +6,6 @@
 
 # DigiEye
 
-### Autonomous AI-Powered Cybersecurity Code Reasoning & Remediation Platform
 
 > **DigiEye** is a defensive-by-design cyber-reasoning system that combines local AI, static analysis, dynamic analysis, fuzzing, automated patch generation, regression testing, and evidence-driven reporting to discover, understand, remediate, and verify software vulnerabilities.
 

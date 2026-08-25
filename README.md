@@ -1,6 +1,6 @@
 
 <p align="center">
-  <img src="https://github.com/Guptaharshal1515/DigiEye/main/Images/logo.png" width="300" alt="DigiEye Logo">
+  <img src="https://github.com/Guptaharshal1515/DigiEye/blob/main/Images/logo.png" width="300" alt="DigiEye Logo">
 </p>
 
 
@@ -132,7 +132,7 @@ DigiEye verifies remediation by:
 # Final Architecture
 
 <p align="center">
-  <img src="https://github.com/Guptaharshal1515/DigiEye/main/Images/Architecture.png" width="100%" alt="DigiEye Architecture">
+  <img src="https://github.com/Guptaharshal1515/DigiEye/blob/main/Images/Architecture.png" width="100%" alt="DigiEye Architecture">
 </p>
 
 ---
@@ -338,7 +338,7 @@ The Evidence Engine answers:
 Instead of storing only an AI-generated explanation, DigiEye maintains evidence from multiple sources.
 
 <p align="center">
-  <img src="https://github.com/Guptaharshal1515/DigiEye/main/Images/Evidence%20engine.png" width="900" alt="DigiEye Evidence Engine">
+  <img src="https://github.com/Guptaharshal1515/DigiEye/blob/main/Images/Evidence%20engine.png" width="900" alt="DigiEye Evidence Engine">
 </p>
 
 Example:

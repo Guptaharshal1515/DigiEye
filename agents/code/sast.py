@@ -1,0 +1,462 @@
+"""
+AI_KAVACH — Code SAST Agent ()
+================================
+Static Application Security Testing agent.
+Runs semgrep, bandit, CodeQL, flawfinder across the target codebase.
+Detects: injection flaws, insecure patterns, hardcoded values,
+         unsafe APIs, logic errors, race conditions.
+
+agent_type: "code_sast"
+Inherits:   BaseAgent
+
+Supported languages via semgrep rules:
+    Python, JS/TS, Java, C/C++, Go, Rust, Ruby, PHP, C#, Swift
+
+Author: AI_KAVACH Team (— Harshal)
+Schema: 1.0.0
+"""
+
+import json
+import logging
+import os
+import re
+from pathlib import Path
+from typing import Optional
+
+from agents.base_agent import BaseAgent
+from app.session_memory import SessionMemory
+from system_prompts.code.code_sast_prompt import CODE_SAST_PROMPT
+
+logger = logging.getLogger("ai_kavach.agents.code.sast")
+
+
+class SASTAgent(BaseAgent):
+    """
+    Static analysis agent. Runs multiple SAST tools in sequence
+    and correlates findings across tools to reduce false positives.
+    """
+
+    def __init__(
+        self,
+        task_id: str,
+        target: str,
+        session_memory: Optional[SessionMemory] = None,
+    ):
+        super().__init__(
+            agent_type="code_sast",
+            task_id=task_id,
+            target=target,
+            session_memory=session_memory,
+        )
+        self.system_prompt = CODE_SAST_PROMPT
+        self._repo_path: Optional[str] = None
+        self._detected_language: Optional[str] = None
+
+        logger.info(f"[{task_id}] SASTAgent initialized | target={target}")
+
+    def _pre_run(self, task_prompt: str, env: dict) -> None:
+        """Resolve target repo path, detect language, and check SAST tools."""
+        repo_path = self.target or self.memory.target
+        if not repo_path:
+            repo_path = self._extract_path_from_text(task_prompt)
+
+        self._repo_path = repo_path
+        if self._repo_path:
+            self.target = self._repo_path
+            self.memory.set_target(self._repo_path)
+            self.memory.add_to_scope(self._repo_path)
+
+        self._detected_language = self._detect_language(self._repo_path)
+
+        available = set(env.get("tools_available", []))
+        sast_tools = [t for t in ["semgrep", "bandit", "codeql"] if t in available]
+
+        if not sast_tools:
+            logger.warning(f"[{self.task_id}] SAST: no tools installed")
+            self._model_struggles.append(
+                "No SAST tools installed — install semgrep at minimum"
+            )
+        else:
+            logger.info(f"[{self.task_id}] SAST: tools available: {sast_tools}")
+
+        logger.info(
+            f"[{self.task_id}] SAST: language={self._detected_language} | "
+            f"repo={self._repo_path}"
+        )
+
+    def _post_run(self, final_answer: Optional[dict], error: Optional[str]) -> Optional[dict]:
+        if not final_answer:
+            return None
+
+        raw_tool_findings = self._extract_findings_from_observations()
+        if raw_tool_findings:
+            merged_findings = list(final_answer.get("findings", []) or []) + raw_tool_findings
+            final_answer["findings"] = merged_findings
+
+        vulnerabilities = self._canonicalize_findings(final_answer)
+
+        final_answer["vulnerabilities"] = vulnerabilities
+        final_answer["findings"] = vulnerabilities
+
+        confidence, confidence_reasoning = self._derive_confidence(vulnerabilities)
+        final_answer["confidence"] = confidence
+        final_answer["confidence_reasoning"] = confidence_reasoning
+
+        if self._repo_path:
+            final_answer["target"] = self._repo_path
+
+        if self._detected_language:
+            final_answer["language"] = self._detected_language
+
+        
+        for finding in vulnerabilities:
+            patch_applied = bool(finding.get("patch_applied"))
+            verified = bool(finding.get("verified"))
+            if patch_applied and not verified:
+                finding["verification_status"] = "not_verified"
+            elif verified:
+                finding["verification_status"] = "verified"
+            else:
+                finding["verification_status"] = "not_requested"
+
+        return final_answer
+
+    def _build_first_message(self, task_prompt: str) -> str:
+        parts = []
+        if self._repo_path:
+            parts.append(f"CODEBASE PATH: {self._repo_path}")
+        if self._detected_language:
+            parts.append(f"DETECTED LANGUAGE: {self._detected_language}")
+        parts.append(
+            "\nSAST SEQUENCE:\n"
+            "1. run_semgrep (all languages, OWASP ruleset)\n"
+            "2. run_bandit (if Python detected)\n"
+            "3. run_flawfinder (if C/C++ detected)\n"
+            "4. run_codeql (if available — deepest analysis)\n"
+            "5. run_sonarqube (if available — enterprise rules)\n"
+            "Correlate findings across tools. Same root-cause issue across tools must be merged into one finding with tool_sources.\n"
+            "Do not call generate_report; final reporting is generated by pipeline post-processing."
+        )
+        parts.append(f"\nTASK:\n{task_prompt}")
+        return "\n".join(parts)
+
+    @staticmethod
+    def _extract_path_from_text(text: str) -> Optional[str]:
+        if not text:
+            return None
+
+        
+        candidates = re.findall(r"[A-Za-z]:[\\/][^\s\"'<>]+", text)
+        for raw in candidates:
+            cleaned = raw.rstrip(".,;:)\"]}")
+            if Path(cleaned).exists():
+                return cleaned
+
+        return None
+
+    @staticmethod
+    def _detect_language(path: Optional[str]) -> Optional[str]:
+        """Detect primary language from path hint + real files when available."""
+        if not path:
+            return None
+
+        path_lower = path.lower()
+        if any(x in path_lower for x in [".py", "python", "django", "flask"]):
+            return "python"
+        if any(x in path_lower for x in [".js", ".ts", "node", "react", "vue"]):
+            return "javascript"
+        if any(x in path_lower for x in [".java", "spring", "maven", "gradle"]):
+            return "java"
+        if any(x in path_lower for x in [".go", "golang"]):
+            return "go"
+        if any(x in path_lower for x in [".rs", "rust", "cargo"]):
+            return "rust"
+        if any(x in path_lower for x in [".php", "laravel", "symfony"]):
+            return "php"
+        if any(x in path_lower for x in [".cs", "dotnet", "aspnet"]):
+            return "csharp"
+        if any(x in path_lower for x in [".rb", "rails", "ruby"]):
+            return "ruby"
+
+        p = Path(path)
+        if not p.exists():
+            return "unknown"
+
+        ext_counts: dict[str, int] = {}
+        suffix_map = {
+            ".py": "python",
+            ".js": "javascript",
+            ".ts": "javascript",
+            ".java": "java",
+            ".c": "c/c++",
+            ".cc": "c/c++",
+            ".cpp": "c/c++",
+            ".h": "c/c++",
+            ".hpp": "c/c++",
+            ".go": "go",
+            ".rs": "rust",
+            ".php": "php",
+            ".cs": "csharp",
+            ".rb": "ruby",
+            ".swift": "swift",
+        }
+
+        try:
+            files = [p] if p.is_file() else list(p.rglob("*"))
+            for f in files:
+                if not f.is_file():
+                    continue
+                lang = suffix_map.get(f.suffix.lower())
+                if not lang:
+                    continue
+                ext_counts[lang] = ext_counts.get(lang, 0) + 1
+                if sum(ext_counts.values()) >= 200:
+                    break
+        except Exception:
+            return "unknown"
+
+        if not ext_counts:
+            return "unknown"
+
+        return max(ext_counts.items(), key=lambda x: x[1])[0]
+
+    def _extract_findings_from_observations(self) -> list[dict]:
+        findings: list[dict] = []
+        for step in self.memory.step_history:
+            if step.get("stage") != "code_sast":
+                continue
+            action = step.get("action")
+            if action not in {"run_semgrep", "run_bandit"}:
+                continue
+
+            raw_obs = step.get("observation")
+            if not raw_obs or not isinstance(raw_obs, str):
+                continue
+
+            try:
+                obs = json.loads(raw_obs)
+            except Exception:
+                continue
+
+            data = obs.get("data", {}) if isinstance(obs, dict) else {}
+            tool_findings = data.get("findings", []) if isinstance(data, dict) else []
+            if not isinstance(tool_findings, list):
+                continue
+
+            for f in tool_findings:
+                if not isinstance(f, dict):
+                    continue
+
+                tool_name = "semgrep" if action == "run_semgrep" else "bandit"
+                source_severities = {tool_name: str(f.get("severity", "medium")).lower()}
+
+                mapped = {
+                    "type": (
+                        "Security Misconfiguration"
+                        if f.get("test_id") == "B104"
+                        else (f.get("type") or "Security Finding")
+                    ),
+                    "severity": str(f.get("severity", "medium")).lower(),
+                    "file": f.get("file", ""),
+                    "line": f.get("line", 0),
+                    "end_line": f.get("end_line", f.get("line", 0)),
+                    "cwe": (
+                        "CWE-668"
+                        if f.get("test_id") == "B104"
+                        else f.get("cwe", "")
+                    ),
+                    "owasp": f.get("owasp", ""),
+                    "message": f.get("message", ""),
+                    "evidence": f.get("code") or f.get("message") or "",
+                    "impact": "",
+                    "remediation": f.get("fix", ""),
+                    "rule_id": f.get("rule_id", ""),
+                    "test_id": f.get("test_id", ""),
+                    "tool_sources": [tool_name],
+                    "source_severities": source_severities,
+                    "confidence": f.get("confidence", None),
+                    "patch_applied": False,
+                    "verified": False,
+                }
+                findings.append(mapped)
+
+        return findings
+
+    @staticmethod
+    def _canonicalize_findings(final_answer: dict) -> list[dict]:
+        raw_findings = []
+        for key in ("vulnerabilities", "findings", "issues"):
+            value = final_answer.get(key)
+            if isinstance(value, list):
+                raw_findings.extend(value)
+
+        normalized = []
+        for item in raw_findings:
+            if not isinstance(item, dict):
+                continue
+
+            file_path = str(item.get("file") or item.get("path") or "")
+            line = item.get("line") or item.get("start_line") or 0
+            end_line = item.get("end_line") or line
+            tool_sources = item.get("tool_sources") or []
+            if isinstance(tool_sources, str):
+                tool_sources = [tool_sources]
+
+            rule_id = str(item.get("rule_id") or "")
+            test_id = str(item.get("test_id") or "")
+            if re.match(r"^B\d+$", test_id):
+                tool_sources.append("bandit")
+            if rule_id:
+                tool_sources.append("semgrep")
+
+            canonical = {
+                "type": item.get("type") or "Security Finding",
+                "severity": str(item.get("severity") or "medium").lower(),
+                "file": file_path,
+                "line": int(line) if str(line).isdigit() else 0,
+                "end_line": int(end_line) if str(end_line).isdigit() else 0,
+                "cwe": str(item.get("cwe") or ""),
+                "owasp": str(item.get("owasp") or ""),
+                "message": item.get("message") or "",
+                "evidence": item.get("evidence") or item.get("code") or "",
+                "impact": item.get("impact") or "",
+                "remediation": item.get("remediation") or item.get("fix") or "",
+                "rule_id": rule_id,
+                "test_id": test_id,
+                "tool_sources": sorted({str(t).lower() for t in tool_sources if t}),
+                "source_severities": item.get("source_severities") or {},
+                "confidence": item.get("confidence"),
+                "patch_applied": bool(item.get("patch_applied", False)),
+                "verified": bool(item.get("verified", False)),
+            }
+
+            if canonical["tool_sources"] and not canonical["source_severities"]:
+                canonical["source_severities"] = {
+                    source: canonical["severity"] for source in canonical["tool_sources"]
+                }
+
+            normalized.append(canonical)
+
+        merged: dict[tuple, dict] = {}
+        for finding in normalized:
+            dedup_key = (
+                SASTAgent._normalize_path(finding.get("file", "")),
+                finding.get("line", 0),
+                SASTAgent._normalize_category(finding.get("type", "")),
+            )
+
+            if dedup_key not in merged:
+                merged[dedup_key] = finding
+                continue
+
+            base = merged[dedup_key]
+            base["tool_sources"] = sorted(
+                set(base.get("tool_sources", [])) | set(finding.get("tool_sources", []))
+            )
+
+            src_sev = dict(base.get("source_severities") or {})
+            src_sev.update(finding.get("source_severities") or {})
+            base["source_severities"] = src_sev
+            base["severity"] = SASTAgent._pick_canonical_severity(src_sev, base.get("severity", "medium"))
+
+            if finding.get("evidence") and finding.get("evidence") not in str(base.get("evidence", "")):
+                if base.get("evidence"):
+                    base["evidence"] = f"{base['evidence']}\n---\n{finding['evidence']}"
+                else:
+                    base["evidence"] = finding["evidence"]
+
+            if not base.get("remediation") and finding.get("remediation"):
+                base["remediation"] = finding["remediation"]
+            if not base.get("impact") and finding.get("impact"):
+                base["impact"] = finding["impact"]
+
+        severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+        result = list(merged.values())
+        result.sort(key=lambda v: severity_order.get(v.get("severity", "medium"), 2))
+        return result
+
+    @staticmethod
+    def _normalize_path(path: str) -> str:
+        if not path:
+            return ""
+
+        p = path.replace("\\", "/")
+        root = str(Path(__file__).resolve().parents[2]).replace("\\", "/")
+
+        
+        if p.lower().startswith("/mnt/hgfs/ai_kavach"):
+            suffix = p[len("/mnt/hgfs/AI_Kavach_CodeAgent"):]
+            p = f"{root}{suffix}"
+
+        return os.path.normpath(p).replace("\\", "/").lower()
+
+    @staticmethod
+    def _normalize_category(category: str) -> str:
+        c = (category or "").strip().lower()
+        c = re.sub(r"\s+", " ", c)
+        return c
+
+    @staticmethod
+    def _cwe_group(cwe_value: str) -> str:
+        cwe = str(cwe_value or "").strip().lower()
+        cwe_num = re.search(r"cwe[-\s:]*(\d+)", cwe)
+        if cwe_num:
+            return f"cwe-{cwe_num.group(1)}"
+        return cwe
+
+    @staticmethod
+    def _rule_family(finding: dict) -> str:
+        cwe = str(finding.get("cwe") or "").strip().lower()
+        cwe_num = re.search(r"cwe[-\s:]*(\d+)", cwe)
+        if cwe_num:
+            return f"cwe-{cwe_num.group(1)}"
+
+        rule_id = (finding.get("rule_id") or "").strip().lower()
+        test_id = (finding.get("test_id") or "").strip().lower()
+        if rule_id:
+            return rule_id
+        if test_id:
+            return test_id
+        return SASTAgent._normalize_category(finding.get("message", ""))[:80]
+
+    @staticmethod
+    def _pick_canonical_severity(source_severities: dict, fallback: str) -> str:
+        rank = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1, "unknown": 0}
+        if not source_severities:
+            return str(fallback or "medium").lower()
+        best = max(
+            (str(v).lower() for v in source_severities.values()),
+            key=lambda s: rank.get(s, 0),
+        )
+        return best
+
+    @staticmethod
+    def _derive_confidence(vulnerabilities: list[dict]) -> tuple[float, str]:
+        if not vulnerabilities:
+            return 0.0, "No confirmed normalized findings from tool outputs."
+
+        scores = []
+        corroborated = 0
+        for v in vulnerabilities:
+            src_count = len(v.get("tool_sources", []))
+            if src_count >= 2:
+                corroborated += 1
+
+            score = 0.45
+            if v.get("file") and v.get("line"):
+                score += 0.2
+            if v.get("evidence"):
+                score += 0.1
+            if src_count >= 2:
+                score += 0.2
+            if isinstance(v.get("confidence"), (int, float)):
+                score = max(score, float(v["confidence"]))
+            scores.append(min(score, 0.99))
+
+        overall = round(sum(scores) / len(scores), 2)
+        reasoning = (
+            f"Derived from {len(vulnerabilities)} normalized finding(s); "
+            f"{corroborated} corroborated by multiple tools; "
+            f"evidence and file/line anchors considered."
+        )
+        return overall, reasoning
